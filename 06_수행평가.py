@@ -1,29 +1,65 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
+import zipfile
 
 st.set_page_config(
-    page_title="서울 공공와이파이 분석",
+    page_title="Seoul Public WiFi Analysis",
     page_icon="📶",
     layout="wide"
 )
 
-st.title("📶 서울 공공와이파이 사용량 분석")
+st.title("📶 Seoul Public WiFi Usage Analysis")
 
 @st.cache_data
 def load_data():
-    df = pd.read_csv(
-        "서울공공와이파이.csv",
-        encoding="cp949",
-        low_memory=False
-    )
+
+    with zipfile.ZipFile(
+        "서울특별시_공공와이파이 AP별 사용량_10_13_2021.zip"
+    ) as z:
+
+        csv_files = [
+            f for f in z.namelist()
+            if f.lower().endswith(".csv")
+        ]
+
+        if not csv_files:
+            st.stop()
+
+        df = None
+
+        for csv_file in csv_files:
+            try:
+                with z.open(csv_file) as f:
+                    temp = pd.read_csv(
+                        f,
+                        encoding="cp949",
+                        low_memory=False
+                    )
+
+                temp.columns = temp.columns.str.strip()
+
+                if "자치구" in temp.columns:
+                    df = temp
+                    break
+
+            except Exception:
+                continue
+
+        if df is None:
+            with z.open(csv_files[0]) as f:
+                df = pd.read_csv(
+                    f,
+                    encoding="cp949",
+                    low_memory=False
+                )
 
     df.columns = df.columns.str.strip()
+
     return df
 
 df = load_data()
 
-# 컬럼 자동 찾기
 district_col = next(
     (c for c in df.columns if "자치구" in c),
     None
@@ -40,7 +76,7 @@ id_col = next(
 )
 
 if district_col is None or usage_col is None:
-    st.error(f"현재 컬럼: {df.columns.tolist()}")
+    st.write(df.columns.tolist())
     st.stop()
 
 df[usage_col] = pd.to_numeric(
@@ -50,13 +86,16 @@ df[usage_col] = pd.to_numeric(
 
 district_usage = (
     df.groupby(district_col)[usage_col]
-      .sum()
-      .reset_index()
-      .sort_values(usage_col, ascending=False)
+    .sum()
+    .reset_index()
+    .sort_values(
+        usage_col,
+        ascending=False
+    )
 )
 
 selected_gu = st.sidebar.selectbox(
-    "자치구 선택",
+    "District",
     district_usage[district_col]
 )
 
@@ -64,14 +103,20 @@ selected_df = df[
     df[district_col] == selected_gu
 ]
 
-st.subheader(f"📍 {selected_gu}")
+st.subheader(selected_gu)
 
-if id_col:
+if id_col is not None:
+
     fig = px.bar(
         selected_df,
         x=id_col,
         y=usage_col,
-        title=f"{selected_gu} AP별 사용량"
+        title=f"{selected_gu} AP Usage"
+    )
+
+    fig.update_layout(
+        height=500,
+        xaxis_tickangle=-45
     )
 
     st.plotly_chart(
@@ -79,7 +124,7 @@ if id_col:
         use_container_width=True
     )
 
-st.subheader("🏆 사용량 TOP10 자치구")
+st.subheader("Top 10 Districts")
 
 top10 = district_usage.head(10)
 
