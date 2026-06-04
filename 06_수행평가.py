@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 import zipfile
+import io
 
 st.set_page_config(
     page_title="Seoul Public WiFi Analysis",
@@ -11,137 +12,94 @@ st.set_page_config(
 
 st.title("📶 Seoul Public WiFi Usage Analysis")
 
+ZIP_FILE = "서울특별시_공공와이파이 AP별 사용량_10_13_2021(1).zip"
+
+
 @st.cache_data
 def load_data():
+    with zipfile.ZipFile(ZIP_FILE) as z:
 
-    with zipfile.ZipFile(
-        "서울특별시_공공와이파이 AP별 사용량_10_13_2021.zip"
-    ) as z:
+        target_file = None
 
-        csv_files = [
-            f for f in z.namelist()
-            if f.lower().endswith(".csv")
-        ]
+        for file in z.namelist():
+            if "관리번호" not in file:
+                target_file = file
 
-        if not csv_files:
-            st.stop()
+        for file in z.namelist():
+            data = z.read(file)
 
-        df = None
-
-        for csv_file in csv_files:
             try:
-                with z.open(csv_file) as f:
-                    temp = pd.read_csv(
-                        f,
-                        encoding="cp949",
-                        low_memory=False
-                    )
+                df = pd.read_csv(io.BytesIO(data), encoding="cp949")
 
-                temp.columns = temp.columns.str.strip()
-
-                if "자치구" in temp.columns:
-                    df = temp
-                    break
+                if "자치구" in df.columns:
+                    return df
 
             except Exception:
                 continue
 
-        if df is None:
-            with z.open(csv_files[0]) as f:
-                df = pd.read_csv(
-                    f,
-                    encoding="cp949",
-                    low_memory=False
-                )
+    return None
 
-    df.columns = df.columns.str.strip()
-
-    return df
 
 df = load_data()
 
-district_col = next(
-    (c for c in df.columns if "자치구" in c),
-    None
-)
-
-usage_col = next(
-    (c for c in df.columns if "이용량" in c or "사용량" in c),
-    None
-)
-
-id_col = next(
-    (c for c in df.columns if "관리번호" in c),
-    None
-)
-
-if district_col is None or usage_col is None:
-    st.write(df.columns.tolist())
+if df is None:
+    st.error("Data file could not be loaded.")
     st.stop()
 
-df[usage_col] = pd.to_numeric(
-    df[usage_col],
+df["AP별 이용량(GB)"] = pd.to_numeric(
+    df["AP별 이용량(GB)"],
     errors="coerce"
 )
 
-district_usage = (
-    df.groupby(district_col)[usage_col]
+# 자치구 선택
+districts = sorted(df["자치구"].dropna().unique())
+
+selected_gu = st.selectbox(
+    "Select District",
+    districts
+)
+
+filtered = df[df["자치구"] == selected_gu]
+
+st.subheader(f"{selected_gu} WiFi Usage")
+
+fig = px.bar(
+    filtered.sort_values("AP별 이용량(GB)", ascending=False).head(30),
+    x="관리번호",
+    y="AP별 이용량(GB)",
+    title=f"{selected_gu} Top AP Usage",
+)
+
+fig.update_layout(
+    xaxis_title="AP ID",
+    yaxis_title="Usage (GB)"
+)
+
+st.plotly_chart(fig, use_container_width=True)
+
+# TOP10 자치구
+st.subheader("Top 10 Districts by Total Usage")
+
+top10 = (
+    df.groupby("자치구")["AP별 이용량(GB)"]
     .sum()
     .reset_index()
-    .sort_values(
-        usage_col,
-        ascending=False
-    )
+    .sort_values("AP별 이용량(GB)", ascending=False)
+    .head(10)
 )
 
-selected_gu = st.sidebar.selectbox(
-    "District",
-    district_usage[district_col]
+top10["Rank"] = range(1, len(top10) + 1)
+
+st.dataframe(
+    top10[["Rank", "자치구", "AP별 이용량(GB)"]],
+    use_container_width=True
 )
-
-selected_df = df[
-    df[district_col] == selected_gu
-]
-
-st.subheader(selected_gu)
-
-if id_col is not None:
-
-    fig = px.bar(
-        selected_df,
-        x=id_col,
-        y=usage_col,
-        title=f"{selected_gu} AP Usage"
-    )
-
-    fig.update_layout(
-        height=500,
-        xaxis_tickangle=-45
-    )
-
-    st.plotly_chart(
-        fig,
-        use_container_width=True
-    )
-
-st.subheader("Top 10 Districts")
-
-top10 = district_usage.head(10)
 
 fig2 = px.bar(
     top10,
-    x=usage_col,
-    y=district_col,
-    orientation="h",
-    text_auto=True
+    x="자치구",
+    y="AP별 이용량(GB)",
+    title="Top 10 Districts"
 )
 
-st.plotly_chart(
-    fig2,
-    use_container_width=True
-)
-
-st.dataframe(
-    top10,
-    use_container_width=True
-)
+st.plotly_chart(fig2, use_container_width=True)
