@@ -2,70 +2,81 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 import zipfile
+import io
 
 st.set_page_config(
-    page_title="서울 공공와이파이 분석",
+    page_title="Seoul Public WiFi Usage",
     page_icon="📶",
     layout="wide"
 )
 
-st.title("📶 서울 공공와이파이 사용량 분석")
+st.title("📶 Seoul Public WiFi Usage Analysis")
+
 
 @st.cache_data
 def load_data():
+    zip_path = "서울특별시_공공와이파이 AP별 사용량_10_13_2021(1)(1).zip"
 
-    with zipfile.ZipFile(
-        "서울특별시_공공와이파이 AP별 사용량_10_13_2021.zip"
-    ) as z:
+    with zipfile.ZipFile(zip_path, "r") as z:
 
-        csv_file = [f for f in z.namelist() if "공공장소" in f][0]
+        for filename in z.namelist():
 
-        with z.open(csv_file) as f:
-            df = pd.read_csv(
-                f,
-                encoding="cp949"
-            )
+            try:
+                with z.open(filename) as f:
+                    df = pd.read_csv(f, encoding="cp949")
 
-    df.columns = df.columns.str.strip()
+                cols = list(df.columns)
 
-    return df
+                if (
+                    "관리번호" in cols
+                    and "자치구" in cols
+                    and any("이용량" in c for c in cols)
+                ):
+                    return df
+
+            except Exception:
+                continue
+
+    return None
+
 
 df = load_data()
 
-# 컬럼 확인용
-st.sidebar.subheader("데이터 정보")
-st.sidebar.write(df.shape)
+if df is None:
+    st.error("데이터를 읽을 수 없습니다.")
+    st.stop()
 
-# 실제 데이터에 맞게 수정
-district_col = "자치구"
-usage_col = "사용량"
+usage_col = [c for c in df.columns if "이용량" in c][0]
 
-district_usage = (
-    df.groupby(district_col)[usage_col]
-    .sum()
-    .reset_index()
-    .sort_values(
-        usage_col,
-        ascending=False
-    )
-)
+df[usage_col] = pd.to_numeric(df[usage_col], errors="coerce")
+df = df.dropna(subset=[usage_col])
+
+st.sidebar.header("Filter")
+
+districts = sorted(df["자치구"].unique())
 
 selected_gu = st.sidebar.selectbox(
     "자치구 선택",
-    district_usage[district_col]
+    districts
 )
 
-selected_df = df[
-    df[district_col] == selected_gu
-]
+filtered = df[df["자치구"] == selected_gu]
 
-st.subheader(f"📍 {selected_gu}")
+st.subheader(f"{selected_gu} AP 사용량")
 
 fig = px.bar(
-    selected_df,
+    filtered.sort_values(
+        usage_col,
+        ascending=False
+    ).head(30),
     x="관리번호",
     y=usage_col,
-    title=f"{selected_gu} AP별 사용량"
+    title=f"{selected_gu} Top 30 AP Usage"
+)
+
+fig.update_layout(
+    xaxis_title="관리번호",
+    yaxis_title="Usage (GB)"
 )
 
 st.plotly_chart(
@@ -73,24 +84,41 @@ st.plotly_chart(
     use_container_width=True
 )
 
-st.subheader("🏆 사용량 TOP10 자치구")
+st.divider()
 
-top10 = district_usage.head(10)
+st.subheader("🏆 사용량 TOP 10 자치구")
 
-fig2 = px.bar(
-    top10,
-    x=usage_col,
-    y=district_col,
-    orientation="h",
-    text_auto=True
+top10 = (
+    df.groupby("자치구")[usage_col]
+    .sum()
+    .reset_index()
+    .sort_values(
+        usage_col,
+        ascending=False
+    )
+    .head(10)
 )
 
-st.plotly_chart(
-    fig2,
-    use_container_width=True
+top10.insert(
+    0,
+    "순위",
+    range(1, len(top10) + 1)
 )
 
 st.dataframe(
     top10,
+    use_container_width=True
+)
+
+fig2 = px.bar(
+    top10,
+    x="자치구",
+    y=usage_col,
+    text_auto=".1f",
+    title="Top 10 Districts"
+)
+
+st.plotly_chart(
+    fig2,
     use_container_width=True
 )
